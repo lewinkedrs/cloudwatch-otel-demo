@@ -167,6 +167,91 @@ shows up in the console and the queries to run.
 
 ---
 
+## PromQL query explorer
+
+The OTLP metrics (managed-scraper Prometheus metrics + the Claude Code fleet +
+OTel SDK self-metrics) are queryable with **PromQL** in
+**CloudWatch → Metrics → Query with PromQL (Query Studio)**, or via the SigV4
+`monitoring` HTTP API (`scripts/verify-telemetry.sh` shows the signed-request
+pattern). Notes on CloudWatch's PromQL dialect:
+
+- Dotted metric names must be quoted: `{"claude_code.token.usage"}`.
+- OTel **resource** attributes use an `@resource.` prefix (quote the whole label
+  because of the dots): `"@resource.team.id"`. Datapoint attributes (`type`,
+  `model`, `method`, `path`, `status`, `decision`, …) are bare.
+- The Claude Code counters are **delta** sums — use `sum_over_time(...[1h])` for
+  a windowed total and `rate(...[5m])` for a per-second rate.
+
+### Managed scraper — Go app (`prom-app-demo`)
+
+```promql
+# Request rate by path and status
+sum by (path, status) (rate(http_requests_total[5m]))
+
+# Error ratio (4xx + 5xx)
+sum(rate(http_requests_total{status=~"[45].."}[5m])) / sum(rate(http_requests_total[5m]))
+
+# p95 request latency (native OTLP histogram)
+histogram_quantile(0.95, rate(http_request_duration_seconds[5m]))
+
+# Average latency by path
+histogram_avg(rate(http_request_duration_seconds[5m]))
+
+# In-flight requests per pod
+sum by ("@resource.k8s.pod.name") (http_requests_in_flight)
+
+# Scrape-target health for the demo namespace (1 = up)
+up{"@resource.k8s.namespace.name"="prom-app-demo"}
+```
+
+### Claude Code fleet (GenAI Coding Agent Insights metrics)
+
+```promql
+# Token burn rate (tokens/sec) by team
+sum by ("@resource.team.id") (rate({"claude_code.token.usage"}[5m]))
+
+# Tokens in the last hour by type (input / output / cacheRead / cacheCreation)
+sum by (type) (sum_over_time({"claude_code.token.usage"}[1h]))
+
+# Estimated spend (USD, last hour) by developer
+sum by ("@resource.user.name") (sum_over_time({"claude_code.cost.usage"}[1h]))
+
+# Spend by model
+sum by (model) (sum_over_time({"claude_code.cost.usage"}[1h]))
+
+# Lines of code added vs removed (last hour)
+sum by (type) (sum_over_time({"claude_code.lines_of_code.count"}[1h]))
+
+# Edit-tool decisions: accept vs reject (per-second)
+sum by (decision) (rate({"claude_code.code_edit_tool.decision"}[5m]))
+
+# Sessions started (last hour) by team
+sum by ("@resource.team.id") (sum_over_time({"claude_code.session.count"}[1h]))
+
+# Commits and PRs across the fleet (last hour)
+sum(sum_over_time({"claude_code.commit.count"}[1h]))
+sum(sum_over_time({"claude_code.pull_request.count"}[1h]))
+
+# Average cost per session (fleet, last hour)
+sum(sum_over_time({"claude_code.cost.usage"}[1h])) / sum(sum_over_time({"claude_code.session.count"}[1h]))
+
+# Tokens by model (last hour)
+sum by (model) (sum_over_time({"claude_code.token.usage"}[1h]))
+```
+
+### Pipeline / fleet health
+
+```promql
+# Spans exported per second by the ADOT collector / SDKs
+sum(rate({"otel.sdk.exporter.span.exported"}[5m]))
+
+# Metric data points exported per second
+sum(rate({"otel.sdk.exporter.metric_data_point.exported"}[5m]))
+
+# Scrape targets currently down
+count(up == 0)
+```
+
 ## Cost
 
 Roughly **~$330/month** if left running (us-east-2, on-demand) with the default
