@@ -50,6 +50,39 @@ export class ZeusDemoStack extends cdk.Stack {
     // =============================================================
     // Managed Node Group - 4x m5.xlarge with AL2023
     // =============================================================
+    // Launch template so nodes boot with IMDSv2 hop limit = 2. A pod is one extra
+    // network hop from IMDS (169.254.169.254); the EC2 default hop limit of 1
+    // blocks pods, so workloads using the node instance role (ADOT collector,
+    // CloudWatch agent, Strands -> Bedrock) can't obtain credentials. Baking it
+    // here makes the stack reproducible from scratch with no manual post-deploy
+    // `modify-instance-metadata-options` step.
+    //
+    // Constraints when a managed node group uses a launch template: the root
+    // volume and metadata options live in the LT, so `diskSize` is removed from
+    // the node group below. We deliberately do NOT set an AMI ID or instance type
+    // in the LT, so EKS still injects the EKS-optimized AL2023 AMI (per amiType)
+    // and its bootstrap user data.
+    const nodeLaunchTemplate = new ec2.CfnLaunchTemplate(this, 'ZeusNodeLaunchTemplate', {
+      launchTemplateData: {
+        metadataOptions: {
+          httpEndpoint: 'enabled',
+          httpTokens: 'required',          // enforce IMDSv2
+          httpPutResponseHopLimit: 2,      // allow pods to reach IMDS
+        },
+        blockDeviceMappings: [
+          {
+            deviceName: '/dev/xvda',        // AL2023 x86 root device
+            ebs: {
+              volumeSize: 80,
+              volumeType: 'gp3',
+              deleteOnTermination: true,
+              encrypted: true,
+            },
+          },
+        ],
+      },
+    });
+
     const nodeGroup = cluster.addNodegroupCapacity('ZeusNodeGroup', {
       instanceTypes: [new ec2.InstanceType('m5.xlarge')],
       // 2 nodes fit the demo comfortably: total pod requests ~5 vCPU / ~10.5 GiB
@@ -63,8 +96,13 @@ export class ZeusDemoStack extends cdk.Stack {
       desiredSize: 2,
       amiType: eks.NodegroupAmiType.AL2023_X86_64_STANDARD,
       capacityType: eks.CapacityType.ON_DEMAND,
-      diskSize: 80,
+      // Root volume + IMDS hop limit are set via the launch template above
+      // (diskSize cannot be combined with a launch template).
       subnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      launchTemplateSpec: {
+        id: nodeLaunchTemplate.ref,
+        version: nodeLaunchTemplate.attrLatestVersionNumber,
+      },
     });
 
     // =============================================================
