@@ -52,9 +52,15 @@ export class ZeusDemoStack extends cdk.Stack {
     // =============================================================
     const nodeGroup = cluster.addNodegroupCapacity('ZeusNodeGroup', {
       instanceTypes: [new ec2.InstanceType('m5.xlarge')],
-      minSize: 3,
-      maxSize: 6,
-      desiredSize: 4,
+      // 2 nodes fit the demo comfortably: total pod requests ~5 vCPU / ~10.5 GiB
+      // vs ~7.8 vCPU / ~29 GiB allocatable on 2x m5.xlarge (~57% CPU / ~34% mem,
+      // ~28 pods/node vs the ~58 cap). Trade-offs (acceptable for a demo): tighter
+      // CPU burst headroom under the load-generator, and no single-node-loss
+      // tolerance (no cluster autoscaler installed). Raise desiredSize to 3 for
+      // margin, or scale up manually up to maxSize.
+      minSize: 2,
+      maxSize: 4,
+      desiredSize: 2,
       amiType: eks.NodegroupAmiType.AL2023_X86_64_STANDARD,
       capacityType: eks.CapacityType.ON_DEMAND,
       diskSize: 80,

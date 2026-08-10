@@ -169,18 +169,20 @@ shows up in the console and the queries to run.
 
 ## Cost
 
-Roughly **~$550/month** if left running (us-east-2, on-demand):
+Roughly **~$330/month** if left running (us-east-2, on-demand) with the default
+2-node group:
 
 | Resource | Est. |
 |---|---|
-| 4× m5.xlarge nodes | ~$440/mo |
+| 2× m5.xlarge nodes (default) | ~$220/mo |
 | EKS control plane | ~$73/mo |
 | 1× NAT gateway + data | ~$35/mo |
 | CloudWatch ingestion (spans/metrics/logs) | ~$20–50/mo |
 
-Reduce to **2 nodes** (~$220/mo saved) by editing `desiredSize`/`minSize` in
-`lib/zeus-demo-stack.ts` — total pod requests are ~5.3 vCPU / ~11 GiB, which fits
-2× m5.xlarge. **`cdk destroy` when idle.**
+Total pod requests are ~5 vCPU / ~10.5 GiB, which fit 2× m5.xlarge at ~57% CPU /
+~34% memory. For more burst headroom or single-node-loss tolerance, bump
+`desiredSize` to 3–4 in `lib/zeus-demo-stack.ts` (`maxSize` is 4). **`cdk destroy`
+when idle.**
 
 ---
 
