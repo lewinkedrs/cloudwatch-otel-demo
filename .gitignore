@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build output
+build/
+*.js
+*.d.ts
+
+# CDK output
+cdk.out/
+cdk.context.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+
+# Agent working notes / stale handoff (superseded by README + docs/)
+.yolo-sisyphus/
+status.md
+
+# Logs
+*.log

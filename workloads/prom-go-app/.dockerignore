@@ -1,0 +1,5 @@
+# Ignore build artifacts and non-essential files
+.git
+.gitignore
+README.md
+*.md
