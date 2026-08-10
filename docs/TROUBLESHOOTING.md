@@ -110,4 +110,7 @@ Not missing — OTLP metrics ingested into CloudWatch are **not** exposed by
 - `image-provider` and `telemetry-docs` (upstream OTel-demo nginx) crashloop on
   an `otel_service_name` nginx-config bug in the chart. Not part of the demo
   signals.
-- Node count can drop from 4 → 2 (~$220/mo saved); total pod requests fit.
+- Node group defaults to **2 nodes** (`min 2 / desired 2 / max 4`). Total pod
+  requests (~5 vCPU / ~10.5 GiB) fit at ~57% CPU / ~34% mem. Trade-offs: tighter
+  CPU burst headroom under the load-generator, and no single-node-loss tolerance
+  (no cluster autoscaler). Bump `desiredSize` to 3–4 for margin.
