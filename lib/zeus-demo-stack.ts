@@ -485,6 +485,12 @@ service:
                       name: 'BEDROCK_MODEL_ID',
                       value: 'us.anthropic.claude-sonnet-4-5-20250929-v1:0',
                     },
+                    {
+                      // Mint a fresh session.id every 5 minutes so the CloudWatch
+                      // GenAI Observability sessions view keeps populating.
+                      name: 'SESSION_ROTATE_INTERVAL',
+                      value: '300',
+                    },
                   ],
                   resources: {
                     requests: {

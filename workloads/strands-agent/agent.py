@@ -31,8 +31,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("strands-agent-demo")
 
-# Generate a unique session ID per run
-SESSION_ID = str(uuid.uuid4())
+# Session IDs are minted and rotated inside run_agent_loop() (every
+# SESSION_ROTATE_INTERVAL seconds) rather than once per process.
 
 # Flag for graceful shutdown
 shutdown_requested = False
@@ -165,13 +165,14 @@ def setup_telemetry():
         "OTEL_RESOURCE_ATTRIBUTES",
         # aws.service.type=gen_ai_agent is the resource attribute CloudWatch GenAI
         # (Bedrock AgentCore) Observability filters on to surface agent
-        # sessions/traces from the aws/spans Transaction Search store.
-        f"service.name=strands-agent-demo,environment=olympus,"
-        f"session.id={SESSION_ID},aws.service.type=gen_ai_agent",
+        # sessions/traces. session.id is intentionally NOT set here: it's a
+        # per-session SPAN attribute (on the Agent's trace_attributes) that the
+        # loop rotates over time so the sessions view keeps populating.
+        "service.name=strands-agent-demo,environment=olympus,"
+        "aws.service.type=gen_ai_agent",
     )
 
     logger.info(f"Configuring OTel telemetry with endpoint: {otel_endpoint}")
-    logger.info(f"Session ID: {SESSION_ID}")
     logger.info(f"Service name: strands-agent-demo")
     logger.info(f"Environment: olympus")
 
@@ -186,14 +187,15 @@ def setup_telemetry():
     return tracer
 
 
-def create_agent():
+def create_agent(session_id):
     """Create and configure the Strands Agent with Bedrock model and tools.
 
-    Uses Amazon Bedrock Claude Sonnet as the underlying model.
-    AWS credentials are provided via IRSA (IAM Roles for Service Accounts)
-    through the default boto3 credential chain.
+    Uses Amazon Bedrock Claude Sonnet as the underlying model. AWS credentials
+    come from the node instance role via IMDS (default boto3 credential chain).
+    The session_id is stamped as a span trace attribute so CloudWatch GenAI
+    Observability groups this agent's traces into a session.
     """
-    # Configure the Bedrock model - uses default credential chain (IRSA in K8s)
+    # Configure the Bedrock model - uses default credential chain (node role/IMDS)
     model = BedrockModel(
         model_id=os.getenv("BEDROCK_MODEL_ID", "anthropic.claude-sonnet-4-20250514-v1:0"),
         region_name=os.getenv("AWS_REGION", os.getenv("AWS_DEFAULT_REGION", "us-west-2")),
@@ -204,7 +206,7 @@ def create_agent():
         model=model,
         tools=[get_weather, calculate, search_knowledge_base],
         trace_attributes={
-            "session.id": SESSION_ID,
+            "session.id": session_id,
             "user.id": os.getenv("AGENT_USER_ID", "demo@olympus-corp.example"),
             "environment": "olympus",
         },
@@ -215,20 +217,19 @@ def create_agent():
         ),
     )
 
-    logger.info("Agent created successfully with Bedrock model and 3 tools")
+    logger.info(f"Agent created for session {session_id}")
     return agent
 
 
-def run_agent_loop(agent):
-    """Run the agent in a loop, cycling through different questions.
+def run_agent_loop():
+    """Run the agent in a loop, cycling through questions and rotating sessions.
 
-    Each iteration generates varied trace data including:
-    - Agent span (top-level)
-    - Cycle spans (reasoning cycles)
-    - Model invoke spans (Bedrock API calls)
-    - Tool spans (tool executions)
+    Each iteration generates a full trace (agent span -> cycle -> model invoke ->
+    tool spans). Every SESSION_ROTATE_INTERVAL seconds (default 300s / 5 min) a
+    new session.id is minted and the agent rebuilt, so CloudWatch GenAI
+    Observability shows a steady stream of new sessions rather than one long one.
 
-    Runs every 60 seconds until shutdown is requested.
+    Runs until shutdown is requested.
     """
     # Questions that exercise different tools to generate varied trace data
     questions = [
@@ -242,11 +243,24 @@ def run_agent_loop(agent):
 
     iteration = 0
     loop_interval = int(os.getenv("AGENT_LOOP_INTERVAL", "60"))
+    rotate_interval = int(os.getenv("SESSION_ROTATE_INTERVAL", "300"))
 
-    logger.info(f"Starting agent loop with {loop_interval}s interval")
+    session_id = str(uuid.uuid4())
+    agent = create_agent(session_id)
+    session_start = time.time()
+    logger.info(f"Starting agent loop with {loop_interval}s interval, "
+                f"rotating session every {rotate_interval}s")
+    logger.info(f"Session started: {session_id}")
     logger.info(f"Questions pool size: {len(questions)}")
 
     while not shutdown_requested:
+        # Rotate to a fresh session on schedule (new session.id -> new Agent).
+        if time.time() - session_start >= rotate_interval:
+            session_id = str(uuid.uuid4())
+            agent = create_agent(session_id)
+            session_start = time.time()
+            logger.info(f"Rotated to new session: {session_id}")
+
         # Select the next question (cycle through the list)
         question = questions[iteration % len(questions)]
         iteration += 1
@@ -285,17 +299,14 @@ def main():
     logger.info("=" * 60)
     logger.info("Strands AI Agent Demo - Starting")
     logger.info(f"Timestamp: {datetime.utcnow().isoformat()}Z")
-    logger.info(f"Session ID: {SESSION_ID}")
+    logger.info(f"Session rotation: every {os.getenv('SESSION_ROTATE_INTERVAL', '300')}s")
     logger.info("=" * 60)
 
     # Step 1: Configure OpenTelemetry
     setup_telemetry()
 
-    # Step 2: Create the agent with Bedrock model and tools
-    agent = create_agent()
-
-    # Step 3: Run the agent loop
-    run_agent_loop(agent)
+    # Step 2: Run the agent loop (creates the agent and rotates sessions itself)
+    run_agent_loop()
 
     logger.info("Strands AI Agent Demo - Shutdown complete")
 
