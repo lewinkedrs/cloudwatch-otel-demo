@@ -33,9 +33,10 @@ the **EC2 node instance role** through IMDS.
 
 Consequences baked into the stack:
 - The node group's **IMDS hop limit must be 2** (a pod is one extra network hop
-  from `169.254.169.254`; the EC2 default of 1 blocks pods). *This is currently
-  applied operationally on the nodes and is **not yet in the CDK** — a node
-  replacement reverts it. See TROUBLESHOOTING.md → "Bake IMDS hop limit into IaC".*
+  from `169.254.169.254`; the EC2 default of 1 blocks pods). Set via the node
+  group's **launch template** (`metadataOptions.httpPutResponseHopLimit: 2`,
+  `httpTokens: required`), so every node boots correctly and it survives node
+  replacement / deploy-from-scratch.
 - The CloudWatch Observability add-on must **not** set `serviceAccountRoleArn`
   (that would trigger IRSA `AssumeRoleWithWebIdentity`, which fails with no OIDC).
 - All IAM permissions the workloads need are attached to the **node group role**

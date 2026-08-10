@@ -30,11 +30,11 @@ so they lose the stale injected `AWS_ROLE_ARN`/`AWS_WEB_IDENTITY_TOKEN_FILE` env
 
 ### ADOT collector / Bedrock: `no EC2 IMDS role found` / creds time out from pods
 Pods couldn't reach IMDS because the node **IMDS hop limit was 1** (a pod is one
-extra hop). **Fix:** set the instance metadata **hop limit to 2**.
-**⚠ Outstanding:** this is currently applied on the running nodes only
-(`aws ec2 modify-instance-metadata-options --http-put-response-hop-limit 2`) and
-is **not in the CDK** — a node replacement reverts it. Bake it in via a launch
-template on the node group for durability.
+extra hop). **Fix:** the node group uses a **launch template** with
+`metadataOptions.httpPutResponseHopLimit: 2` (and `httpTokens: required` for
+IMDSv2), so every node boots with the correct hop limit. This is in the CDK, so
+it survives node replacement and deploy-from-scratch. (Historically applied
+manually with `aws ec2 modify-instance-metadata-options`; no longer needed.)
 
 ## Container image builds
 
