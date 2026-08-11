@@ -22,47 +22,71 @@ All telemetry is tagged with `environment=olympus` for easy filtering.
 ## Architecture
 
 ```mermaid
-flowchart TB
-    subgraph EKS["EKS cluster: zeus-otel-demo (K8s 1.31, m5.xlarge nodes)"]
+flowchart LR
+    subgraph EKS["EKS cluster: zeus-otel-demo (K8s 1.31, 2x m5.xlarge)"]
         direction TB
-        subgraph cw["ns: amazon-cloudwatch"]
-            CWA["CloudWatch Observability add-on<br/>(cloudwatch-agent DaemonSet)"]
-        end
         subgraph od["ns: otel-demo"]
-            ADOT["ADOT Collector<br/>OTLP :4317 gRPC / :4318 HTTP"]
             DEMO["OpenTelemetry Demo<br/>(frontend, cart, checkout, ...)"]
+            ADOT["ADOT Collector<br/>OTLP :4317 gRPC / :4318 HTTP"]
         end
         subgraph cc["ns: claude-code"]
-            SIM["claude-code-simulator<br/>(5-dev fleet, native schema)"]
+            SIM["claude-code-simulator<br/>(native claude_code.* metrics)"]
         end
         subgraph ao["ns: agent-observability"]
             STR["strands-agent<br/>(Bedrock Sonnet 4.5)"]
         end
         subgraph pa["ns: prom-app-demo"]
-            GO["prom-go-app x2<br/>/metrics :8080"]
+            GO["prom-go-app x2<br/>:8080/metrics"]
+        end
+        subgraph cw["ns: amazon-cloudwatch"]
+            CWA["CloudWatch Observability add-on<br/>(cloudwatch-agent + fluent-bit)"]
         end
     end
 
-    SCRAPER["APS Managed Scraper<br/>(agentless, in-VPC ENI)"]
+    SCRAPER["APS Managed Scraper<br/>(agentless, AWS-managed ENI in VPC)"]
 
-    subgraph CW["Amazon CloudWatch"]
+    subgraph CWSURF["Amazon CloudWatch"]
+        direction TB
+        XRAY["X-Ray / Transaction Search<br/>(aws/spans)"]
+        APPSIG["Application Signals"]
+        GENAI["GenAI Observability<br/>(agent sessions)"]
+        METRICS["Metrics store<br/>(PromQL: /api/v1/query)"]
+        CAI["Coding Agent Insights<br/>(Claude Code)"]
         CI["Container Insights"]
-        CAI["Coding Agent Insights"]
-        GENAI["GenAI Observability<br/>(AgentCore sessions/traces)"]
-        TS["X-Ray / Transaction Search<br/>+ Application Signals"]
-        PROM["PromQL metric store<br/>monitoring endpoint /api/v1/query"]
+        LOGS["CloudWatch Logs"]
     end
 
-    DEMO -->|OTLP| ADOT
+    %% In-cluster workloads PUSH OTLP to the shared collector
+    DEMO -->|OTLP traces + metrics| ADOT
     SIM -->|OTLP metrics| ADOT
     STR -->|OTLP traces| ADOT
-    CWA -->|node role / IMDS| CI
-    ADOT -->|SigV4| CAI
-    ADOT -->|SigV4| TS
-    ADOT -->|SigV4, aws.service.type=gen_ai_agent| GENAI
-    GO -.scraped.-> SCRAPER
-    SCRAPER -->|cloudWatchConfiguration| PROM
+
+    %% Collector exports to CloudWatch (SigV4, node-role creds via IMDS)
+    ADOT -->|traces| XRAY
+    ADOT -->|metrics| METRICS
+    ADOT -->|logs| LOGS
+
+    %% Console views derived from the ingested telemetry
+    XRAY --> APPSIG
+    XRAY -->|spans tagged aws.service.type=gen_ai_agent| GENAI
+    METRICS -->|claude_code.* metrics| CAI
+
+    %% Container Insights add-on pushes metrics + container logs directly (node role/IMDS)
+    CWA -->|metrics| CI
+    CWA -->|container logs| LOGS
+
+    %% Managed scraper PULLS /metrics from the Go app, then writes to CloudWatch
+    SCRAPER ==>|scrapes :8080/metrics| GO
+    SCRAPER -->|cloudWatchConfiguration| METRICS
 ```
+
+**Reading the diagram:** thin arrows are **push** (OTLP from workloads into the
+collector; SigV4 exports from the collector/add-on to CloudWatch). The **thick
+arrow is a pull** — the managed scraper reaches into the cluster and scrapes
+`prom-go-app`, then writes those metrics to CloudWatch. Application Signals,
+GenAI Observability, and Coding Agent Insights are **views derived** from the
+spans / metrics already ingested (X-Ray span store and the metrics store),
+not separate ingestion paths.
 
 Key design decisions (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full rationale):
 
