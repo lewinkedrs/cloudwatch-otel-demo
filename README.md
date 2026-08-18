@@ -141,6 +141,38 @@ npx cdk deploy --require-approval never
 
 ---
 
+## Optional: GPU metrics (Container Insights)
+
+Off by default. To also provision a GPU node and a continuous GPU inference
+workload — so Container Insights shows NVIDIA GPU metrics (`DCGM_FI_DEV_GPU_UTIL`,
+`DCGM_FI_DEV_FB_USED`, `DCGM_FI_DEV_POWER_USAGE`, `DCGM_FI_DEV_GPU_TEMP`, …) —
+deploy with the `enableGpu` context flag:
+
+```bash
+npx cdk deploy -c enableGpu=true --require-approval never
+```
+
+This adds a **1× g4dn.xlarge** (NVIDIA T4, ~$0.53/hr) managed node group, the
+NVIDIA device plugin, and a `gpu-inference` workload (a continuous PyTorch
+forward-pass loop). The CloudWatch Observability add-on's `dcgm-exporter`
+auto-schedules onto the GPU node — no extra config. It reuses the shared launch
+template (IMDS hop-limit 2) and the CPU node role.
+
+After enabling, tag the GPU node group's ASG so the account cost-janitor
+(SpringClean) doesn't scale it to zero — EKS creates the ASG, so CDK tags don't
+reach it (same caveat as the CPU node group, see TROUBLESHOOTING.md):
+
+```bash
+ASG=$(aws eks describe-nodegroup --cluster-name zeus-otel-demo --nodegroup-name <gpu-ng-name> \
+  --region us-east-2 --query 'nodegroup.resources.autoScalingGroups[0].name' --output text)
+aws autoscaling create-or-update-tags --region us-east-2 \
+  --tags ResourceId=$ASG,ResourceType=auto-scaling-group,Key=auto-delete,Value=no,PropagateAtLaunch=true \
+         ResourceId=$ASG,ResourceType=auto-scaling-group,Key=springclean,Value=do-not-clean,PropagateAtLaunch=true
+```
+
+Query the GPU metrics with PromQL, e.g. `cwpromql query '{"DCGM_FI_DEV_GPU_UTIL"}'`.
+Delete the GPU node group when idle to stop the hourly cost.
+
 ## Post-deploy
 
 ### 1. Configure kubectl
