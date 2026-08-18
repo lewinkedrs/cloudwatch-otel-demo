@@ -580,6 +580,146 @@ service:
     promGoAppDeployment.node.addDependency(namespaces);
 
     // =============================================================
+    // OPTIONAL: GPU node group + continuous GPU inference workload
+    // -------------------------------------------------------------
+    // OFF by default. Enable at deploy time with:
+    //     npx cdk deploy -c enableGpu=true
+    //
+    // Adds a 1x g4dn.xlarge (NVIDIA T4) managed node group, the NVIDIA device
+    // plugin, and a continuous PyTorch inference workload so CloudWatch Container
+    // Insights shows GPU metrics (DCGM_FI_DEV_GPU_UTIL, FB_USED, POWER_USAGE,
+    // GPU_TEMP, ...). The CloudWatch Observability add-on's dcgm-exporter
+    // auto-schedules onto the GPU node once it joins -- no extra config needed.
+    //
+    // Reuses the shared launch template (IMDS hop limit 2 / IMDSv2 / 80GB gp3)
+    // and the CPU node role (already carries CloudWatchAgentServerPolicy, etc.).
+    // Cost: ~$0.53/hr on-demand. NOTE: like the CPU node group, EKS creates the
+    // ASG so CDK tags don't reach it -- tag the GPU ASG auto-delete=no + a
+    // `springclean` key after deploy to protect it from the account cost-janitor.
+    // =============================================================
+    const enableGpuCtx = this.node.tryGetContext('enableGpu');
+    const enableGpu = enableGpuCtx === true || String(enableGpuCtx).toLowerCase() === 'true';
+
+    if (enableGpu) {
+      const gpuNodeGroup = cluster.addNodegroupCapacity('ZeusGpuNodeGroup', {
+        instanceTypes: [new ec2.InstanceType('g4dn.xlarge')],
+        minSize: 1,
+        maxSize: 1,
+        desiredSize: 1,
+        amiType: eks.NodegroupAmiType.AL2023_X86_64_NVIDIA,
+        capacityType: eks.CapacityType.ON_DEMAND,
+        nodeRole: nodeGroup.role,            // reuse the CPU node role (has the worker + CW policies)
+        labels: { workload: 'gpu-inference' },
+        subnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+        launchTemplateSpec: {                // reuse the IMDS-hop-limit-2 / 80GB launch template
+          id: nodeLaunchTemplate.ref,
+          version: nodeLaunchTemplate.attrLatestVersionNumber,
+        },
+      });
+
+      // NVIDIA device plugin -> advertises nvidia.com/gpu on the GPU node so pods
+      // can request GPUs. Scoped to the GPU node via the workload=gpu-inference label.
+      const devicePlugin = cluster.addManifest('NvidiaDevicePlugin', {
+        apiVersion: 'apps/v1',
+        kind: 'DaemonSet',
+        metadata: { name: 'nvidia-device-plugin-daemonset', namespace: 'kube-system' },
+        spec: {
+          selector: { matchLabels: { name: 'nvidia-device-plugin-ds' } },
+          updateStrategy: { type: 'RollingUpdate' },
+          template: {
+            metadata: { labels: { name: 'nvidia-device-plugin-ds' } },
+            spec: {
+              nodeSelector: { workload: 'gpu-inference' },
+              tolerations: [
+                { key: 'nvidia.com/gpu', operator: 'Exists', effect: 'NoSchedule' },
+                { operator: 'Exists' },
+              ],
+              priorityClassName: 'system-node-critical',
+              containers: [
+                {
+                  name: 'nvidia-device-plugin-ctr',
+                  image: 'nvcr.io/nvidia/k8s-device-plugin:v0.16.2',
+                  env: [{ name: 'FAIL_ON_INIT_ERROR', value: 'false' }],
+                  securityContext: { privileged: true },
+                  volumeMounts: [
+                    { name: 'device-plugin', mountPath: '/var/lib/kubelet/device-plugins' },
+                  ],
+                },
+              ],
+              volumes: [
+                { name: 'device-plugin', hostPath: { path: '/var/lib/kubelet/device-plugins' } },
+              ],
+            },
+          },
+        },
+      });
+      devicePlugin.node.addDependency(gpuNodeGroup);
+
+      // Continuous GPU "inference" loop -> steady, non-zero GPU utilization/memory.
+      const gpuInferenceScript = [
+        'import torch, time, torch.nn as nn',
+        'assert torch.cuda.is_available(), "CUDA not available"',
+        'dev = "cuda"',
+        'print("GPU:", torch.cuda.get_device_name(0), flush=True)',
+        'model = nn.Sequential(nn.Linear(4096,4096), nn.ReLU(), nn.Linear(4096,4096), nn.ReLU(), nn.Linear(4096,1000)).to(dev).eval()',
+        'x = torch.randn(512, 4096, device=dev)',
+        'n = 0',
+        'with torch.no_grad():',
+        '    while True:',
+        '        for _ in range(40):',
+        '            y = model(x); torch.cuda.synchronize()',
+        '        n += 40',
+        '        if n % 400 == 0:',
+        '            print(f"inferences={n} gpu_mem={torch.cuda.memory_allocated()//(1024*1024)}MB", flush=True)',
+        '        time.sleep(0.15)',
+      ].join('\n');
+
+      const gpuNamespace = cluster.addManifest('GpuInferenceNamespace', {
+        apiVersion: 'v1',
+        kind: 'Namespace',
+        metadata: { name: 'gpu-inference' },
+      });
+
+      const gpuInference = cluster.addManifest('GpuInferenceDeployment', {
+        apiVersion: 'apps/v1',
+        kind: 'Deployment',
+        metadata: { name: 'gpu-inference', namespace: 'gpu-inference', labels: { app: 'gpu-inference' } },
+        spec: {
+          replicas: 1,
+          selector: { matchLabels: { app: 'gpu-inference' } },
+          template: {
+            metadata: { labels: { app: 'gpu-inference' } },
+            spec: {
+              nodeSelector: { workload: 'gpu-inference' },
+              tolerations: [
+                { key: 'nvidia.com/gpu', operator: 'Exists', effect: 'NoSchedule' },
+              ],
+              containers: [
+                {
+                  name: 'inference',
+                  image: 'pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime',
+                  command: ['python', '-u', '-c'],
+                  args: [gpuInferenceScript],
+                  resources: {
+                    requests: { 'nvidia.com/gpu': 1, cpu: '1', memory: '4Gi' },
+                    limits: { 'nvidia.com/gpu': 1, cpu: '2', memory: '6Gi' },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      });
+      gpuInference.node.addDependency(gpuNamespace);
+      gpuInference.node.addDependency(devicePlugin);
+
+      new cdk.CfnOutput(this, 'GpuNodeGroupName', {
+        value: gpuNodeGroup.nodegroupName,
+        description: 'GPU node group (enableGpu=true). Tag its ASG auto-delete=no + springclean to protect from SpringClean.',
+      });
+    }
+
+    // =============================================================
     // Stack Outputs
     // =============================================================
     new cdk.CfnOutput(this, 'ClusterName', {
