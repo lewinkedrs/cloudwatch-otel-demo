@@ -5,7 +5,7 @@ import * as eks from 'aws-cdk-lib/aws-eks';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { DockerImageAsset, Platform } from 'aws-cdk-lib/aws-ecr-assets';
 import { Construct } from 'constructs';
-import { KubectlV31Layer } from '@aws-cdk/lambda-layer-kubectl-v31';
+import { KubectlV36Layer } from '@aws-cdk/lambda-layer-kubectl-v36';
 
 export class ZeusDemoStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -34,12 +34,14 @@ export class ZeusDemoStack extends cdk.Stack {
     });
 
     // =============================================================
-    // EKS Cluster - Kubernetes 1.31 with kubectl v31 layer
+    // EKS Cluster - Kubernetes 1.36 with kubectl v36 layer
+    // (latest EKS standard-support version; the kubectl layer minor must stay
+    // within +/-1 of the cluster version, so bump both together on any upgrade.)
     // =============================================================
     const cluster = new eks.Cluster(this, 'ZeusCluster', {
       clusterName: 'zeus-otel-demo',
-      version: eks.KubernetesVersion.V1_31,
-      kubectlLayer: new KubectlV31Layer(this, 'KubectlLayer'),
+      version: eks.KubernetesVersion.V1_36,
+      kubectlLayer: new KubectlV36Layer(this, 'KubectlLayer'),
       defaultCapacity: 0, // We'll create a managed node group separately
       vpc,
       vpcSubnets: [{ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }],
