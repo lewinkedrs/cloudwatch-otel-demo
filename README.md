@@ -1,4 +1,4 @@
-# CloudWatch OTel Demo (Zeus)
+# CloudWatch OTel Demo
 
 An AWS CDK project that stands up an **Amazon EKS** cluster wired end‑to‑end to
 **Amazon CloudWatch's OpenTelemetry observability** surfaces. It's a single
