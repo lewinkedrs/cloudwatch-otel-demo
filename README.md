@@ -23,7 +23,7 @@ All telemetry is tagged with `environment=olympus` for easy filtering.
 
 ```mermaid
 flowchart LR
-    subgraph EKS["EKS cluster: zeus-otel-demo (K8s 1.31, 2x m5.xlarge)"]
+    subgraph EKS["EKS cluster: zeus-otel-demo (K8s 1.36, 2x m5.xlarge)"]
         direction TB
         subgraph od["ns: otel-demo"]
             DEMO["OpenTelemetry Demo<br/>(frontend, cart, checkout, ...)"]
@@ -109,7 +109,7 @@ Key design decisions (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the f
 | Node.js | 18+ | CDK app runtime |
 | CDK CLI | 2.170+ | `npx cdk` is used below (pinned in `package.json`) |
 | Docker | Latest, **running** | Builds 3 workload images. On Apple Silicon they build as `linux/amd64` |
-| kubectl | 1.31+ | Post-deploy cluster access |
+| kubectl | 1.36+ | Post-deploy cluster access |
 | Amazon Bedrock | model access | Enable **Claude Sonnet 4.5** (`us.anthropic.claude-sonnet-4-5-20250929-v1:0`) in the region |
 | CloudWatch | Transaction Search **enabled** | Required for X‑Ray span ingestion, Application Signals, and GenAI/AgentCore views |
 

@@ -14,13 +14,13 @@
     "diff": "cdk diff"
   },
   "devDependencies": {
-    "typescript": "~5.6.0",
-    "aws-cdk": "^2.170.0",
-    "@types/node": "^22.0.0"
+    "@types/node": "^22.0.0",
+    "aws-cdk": "^2.263.0",
+    "typescript": "~5.6.0"
   },
   "dependencies": {
-    "aws-cdk-lib": "^2.170.0",
-    "constructs": "^10.0.0",
-    "@aws-cdk/lambda-layer-kubectl-v31": "^2.0.0"
+    "@aws-cdk/lambda-layer-kubectl-v36": "^2.0.1",
+    "aws-cdk-lib": "^2.263.0",
+    "constructs": "^10.0.0"
   }
 }
